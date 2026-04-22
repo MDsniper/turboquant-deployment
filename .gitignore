@@ -1,0 +1,27 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+
+# Models (large files)
+models/*.gguf
+models/*.bin
+*.gguf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
