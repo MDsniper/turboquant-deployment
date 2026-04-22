@@ -415,6 +415,32 @@ cmake --build build -j$(nproc)
 
 ---
 
+## MCP Integration (Z.AI Tools + Local LLM)
+
+Connect Z.AI's MCP servers (Vision, Search, Reader, ZRead) to your local TurboQuant LLM for a powerful private AI assistant with web access.
+
+**Architecture:** AI Client → Local TurboQuant LLM + Z.AI MCP Tool Servers
+
+```bash
+# Quick setup
+cp mcp-configs/cline.json ~/.config/cline/mcp-settings.json
+# Edit and add your Z_AI_API_KEY
+```
+
+Full guide: [`docs/mcp-integration.md`](docs/mcp-integration.md)
+
+**Supported clients:** Cline (VS Code), Goose (Terminal), Continue.dev, OpenCode
+
+**What you get:**
+- 🌐 **Web Search** — Real-time information retrieval
+- 📄 **Web Reader** — Fetch and summarize any webpage
+- 🖼️ **Vision** — Analyze screenshots, diagrams, charts, videos
+- 🔍 **ZRead** — Deep GitHub repo analysis
+
+All LLM inference stays local on your GPU. Only tool queries hit Z.AI's APIs.
+
+---
+
 ## Updating
 
 ### Update llama.cpp

@@ -1,0 +1,51 @@
+# Goose Configuration for TurboQuant + Z.AI MCP
+# Place at: ~/.config/goose/config.yaml
+
+extensions:
+  developer:
+    name: developer
+    cmd: goose-mcp-developer
+    type: stdio
+    args: []
+    envs: {}
+
+  # Z.AI Vision MCP (local stdio)
+  zai-vision:
+    name: zai-vision
+    cmd: npx
+    type: stdio
+    args: ["-y", "@z_ai/mcp-server"]
+    envs:
+      Z_AI_API_KEY: "${Z_AI_API_KEY}"
+      Z_AI_MODE: "ZAI"
+
+  # Z.AI Search MCP (remote HTTP)
+  zai-search:
+    name: zai-search
+    type: http
+    uri: https://api.z.ai/api/mcp/web_search_prime/mcp
+    headers:
+      Authorization: "Bearer ${Z_AI_API_KEY}"
+
+  # Z.AI Reader MCP (remote HTTP)
+  zai-reader:
+    name: zai-reader
+    type: http
+    uri: https://api.z.ai/api/mcp/web_reader/mcp
+    headers:
+      Authorization: "Bearer ${Z_AI_API_KEY}"
+
+  # Z.AI ZRead MCP (remote HTTP)
+  zai-zread:
+    name: zai-zread
+    type: http
+    uri: https://api.z.ai/api/mcp/zread/mcp
+    headers:
+      Authorization: "Bearer ${Z_AI_API_KEY}"
+
+# LLM Provider — Local TurboQuant via OpenAI-compatible API
+provider: openai
+openai:
+  api_key: "no-key-needed"
+  model: "Qwen3.6-35B-A3B-TurboQuant"
+  base_url: "http://localhost:8080/v1"

@@ -1,0 +1,57 @@
+{
+  "models": [
+    {
+      "title": "TurboQuant Local",
+      "provider": "openai",
+      "model": "Qwen3.6-35B-A3B-TurboQuant",
+      "apiBase": "http://localhost:8080/v1",
+      "apiKey": "no-key-needed"
+    }
+  ],
+  "experimental": {
+    "modelContextProtocolServers": [
+      {
+        "name": "zai-vision",
+        "transport": {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["-y", "@z_ai/mcp-server"],
+          "env": {
+            "Z_AI_API_KEY": "${Z_AI_API_KEY}",
+            "Z_AI_MODE": "ZAI"
+          }
+        }
+      },
+      {
+        "name": "zai-search",
+        "transport": {
+          "type": "http",
+          "url": "https://api.z.ai/api/mcp/web_search_prime/mcp",
+          "headers": {
+            "Authorization": "Bearer ${Z_AI_API_KEY}"
+          }
+        }
+      },
+      {
+        "name": "zai-reader",
+        "transport": {
+          "type": "http",
+          "url": "https://api.z.ai/api/mcp/web_reader/mcp",
+          "headers": {
+            "Authorization": "Bearer ${Z_AI_API_KEY}"
+          }
+        }
+      },
+      {
+        "name": "zai-zread",
+        "transport": {
+          "type": "http",
+          "url": "https://api.z.ai/api/mcp/zread/mcp",
+          "headers": {
+            "Authorization": "Bearer ${Z_AI_API_KEY}"
+          }
+        }
+      }
+    ]
+  }
+}
