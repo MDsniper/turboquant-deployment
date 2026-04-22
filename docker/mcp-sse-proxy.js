@@ -1,26 +1,12 @@
 #!/usr/bin/env node
 /**
- * MCP SSE-to-Backend Proxy
+ * MCP SSE + Streamable HTTP Proxy
  *
- * Exposes any MCP backend (HTTP or stdio) as an SSE endpoint.
+ * Supports BOTH transports on the same /sse endpoint:
+ *   GET  /sse  → SSE stream (sends endpoint event)
+ *   POST /sse  → Streamable HTTP (immediate response)
  *
- * HTTP Backend Mode:
- *   MCP_BACKEND_TYPE=http
- *   MCP_BACKEND_URL=https://api.z.ai/api/mcp/.../mcp
- *   Z_AI_API_KEY=...
- *
- * Stdio Backend Mode:
- *   MCP_BACKEND_TYPE=stdio
- *   MCP_BACKEND_CMD=npx
- *   MCP_BACKEND_ARGS=["-y","@z_ai/mcp-server"]
- *   Z_AI_API_KEY=...
- *   Z_AI_MODE=ZAI
- *
- * Usage:
- *   node mcp-sse-proxy.js
- *
- * Then in your MCP client, add:
- *   http://localhost:PORT/sse
+ * Also supports legacy POST /message for SSE clients.
  */
 
 const http = require("http");
@@ -142,13 +128,17 @@ function sendSseEvent(res, event, data) {
   res.write(`data: ${data}\n\n`);
 }
 
+function setCors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
+  res.setHeader("Access-Control-Expose-Headers", "*");
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  setCors(res);
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -168,7 +158,7 @@ const server = http.createServer(async (req, res) => {
     });
 
     sessions.set(sessionId, res);
-    console.log(`[${sessionId}] Client connected`);
+    console.log(`[${sessionId}] Client connected (SSE)`);
 
     // Send endpoint event
     sendSseEvent(res, "endpoint", postUrl);
@@ -180,7 +170,39 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /message — handle JSON-RPC request
+  // POST /sse — Streamable HTTP transport
+  if (url.pathname === "/sse" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", async () => {
+      try {
+        if (BACKEND_TYPE === "http") {
+          const result = await httpSend(body);
+          res.writeHead(result.status, { "Content-Type": "application/json" });
+          res.end(result.body);
+        } else {
+          const jsonBody = JSON.parse(body);
+          res.writeHead(202, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ accepted: true }));
+          const method = jsonBody.method;
+          const params = jsonBody.params || {};
+          // For stdio, we need a session to send back via SSE
+          // Streamable HTTP over stdio is tricky — we'll return via the most recent session
+          const lastSession = Array.from(sessions.values()).pop();
+          if (lastSession) {
+            stdioSend(method, params, "streamable", lastSession);
+          }
+        }
+      } catch (err) {
+        console.error("Error handling POST /sse:", err.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /message — legacy SSE message endpoint
   if (url.pathname === "/message" && req.method === "POST") {
     const sessionId = url.searchParams.get("sessionId");
     let body = "";
@@ -194,13 +216,11 @@ const server = http.createServer(async (req, res) => {
           res.writeHead(result.status, { "Content-Type": "application/json" });
           res.end(result.body);
 
-          // Also send to SSE stream if session exists
           const sseRes = sessions.get(sessionId);
           if (sseRes && result.status === 200) {
             sendSseEvent(sseRes, "message", result.body);
           }
         } else {
-          // stdio
           res.writeHead(202, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ accepted: true }));
 
@@ -230,7 +250,7 @@ if (BACKEND_TYPE === "stdio") {
 }
 
 server.listen(PORT, () => {
-  console.log(`MCP SSE Proxy running on http://localhost:${PORT}/sse`);
+  console.log(`MCP SSE Proxy running on http://0.0.0.0:${PORT}/sse`);
   console.log(`Backend: ${BACKEND_TYPE} → ${BACKEND_TYPE === "http" ? BACKEND_URL : BACKEND_CMD}`);
 });
 
