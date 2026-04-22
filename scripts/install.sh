@@ -9,8 +9,27 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-MODEL_URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-MODEL_PATH="$HOME/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+# GPU Profile Selection
+GPU_PROFILE="${1:-rtx3090}"  # default to rtx3090 if no arg given
+
+if [ "$GPU_PROFILE" = "rtx4080" ]; then
+    MODEL_URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf"
+    MODEL_PATH="$HOME/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf"
+    CONTEXT="12288"
+    SERVICE_TEMPLATE="configs/rtx4080-16gb/llama-turboquant.service"
+    echo -e "${YELLOW}Profile: RTX 4080 16GB${NC}"
+    echo -e "${YELLOW}Model: Qwen3.6-35B-A3B Q4_K_S (~16GB)${NC}"
+    echo -e "${YELLOW}Context: 12,288 tokens${NC}"
+else
+    MODEL_URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    MODEL_PATH="$HOME/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    CONTEXT="24576"
+    SERVICE_TEMPLATE="configs/rtx3090-24gb/llama-turboquant.service"
+    echo -e "${YELLOW}Profile: RTX 3090 24GB (default)${NC}"
+    echo -e "${YELLOW}Model: Qwen3.6-35B-A3B Q4_K_M (~21GB)${NC}"
+    echo -e "${YELLOW}Context: 24,576 tokens${NC}"
+fi
+
 LLAMA_CPP_DIR="$HOME/llama-cpp-turboquant"
 SERVICE_NAME="llama-turboquant"
 
@@ -30,8 +49,15 @@ echo "  ✓ CUDA available ($(nvcc --version | grep release | awk '{print $6}'))
 echo "  ✓ GPU detected ($(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1))"
 echo "  ✓ GPU Memory: ${GPU_MEM} MiB"
 
-if [ "$GPU_MEM" -lt 22000 ]; then
-    echo -e "${YELLOW}  ⚠ Warning: Less than 22 GB VRAM detected. You may need to reduce context length (-c) or use a smaller model.${NC}"
+if [ "$GPU_PROFILE" = "rtx3090" ] && [ "$GPU_MEM" -lt 22000 ]; then
+    echo -e "${YELLOW}  ⚠ Warning: Less than 22 GB VRAM detected for RTX 3090 profile.${NC}"
+    echo -e "${YELLOW}    Consider using --gpu rtx4080 for 16GB cards.${NC}"
+fi
+
+if [ "$GPU_PROFILE" = "rtx4080" ] && [ "$GPU_MEM" -lt 15000 ]; then
+    echo -e "${RED}  ✗ Error: Less than 15 GB VRAM detected. RTX 4080 profile requires ~16 GB.${NC}"
+    echo -e "${RED}    You may need a smaller model (Qwen2.5-14B, Qwen3-8B).${NC}"
+    exit 1
 fi
 
 # ─── Clone llama.cpp ─────────────────────────────────────────────────
@@ -101,7 +127,15 @@ if [ "$EUID" -ne 0 ]; then
     echo "  Requesting sudo for system service installation..."
 fi
 
-sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null <<EOF
+# Use template service file if available, otherwise generate inline
+if [ -f "${SERVICE_TEMPLATE}" ]; then
+    echo "  Using ${SERVICE_TEMPLATE} template..."
+    sed -e "s|<USER>|${CURRENT_USER}|g" \
+        -e "s|/home/<USER>|${CURRENT_HOME}|g" \
+        -e "s|MODEL_FOR_16GB.gguf|$(basename "${MODEL_PATH}")|g" \
+        "${SERVICE_TEMPLATE}" | sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null
+else
+    sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null <<EOF
 [Unit]
 Description=llama.cpp server with TurboQuant (Qwen3.6-35B-A3B)
 After=network.target
@@ -119,13 +153,14 @@ Environment="HOME=${CURRENT_HOME}"
 ExecStart=${LLAMA_CPP_DIR}/build/bin/llama-server \
     -m ${MODEL_PATH} \
     --alias "Qwen3.6-35B-A3B-TurboQuant" \
-    -ngl 99 -c 24576 -fa on --jinja \
+    -ngl 99 -c ${CONTEXT} -fa on --jinja \
     --cache-type-k q8_0 --cache-type-v turbo4 \
     -np 1 --metrics --host 0.0.0.0 --port 8080
 
 [Install]
 WantedBy=multi-user.target
 EOF
+fi
 
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
@@ -156,6 +191,7 @@ done
 echo ""
 echo -e "${GREEN}=== Deployment Complete ===${NC}"
 echo ""
+echo "  Profile:     $GPU_PROFILE"
 echo "  Service:     $SERVICE_NAME"
 echo "  Status:      $(sudo systemctl is-active "$SERVICE_NAME")"
 echo "  URL:         http://localhost:8080"

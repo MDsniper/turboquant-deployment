@@ -3,7 +3,7 @@
 > Deploy [Qwen3.6-35B-A3B-GGUF](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) with [TurboQuant+](https://github.com/TheTom/turboquant_plus) KV-cache compression on NVIDIA GPUs using llama.cpp.
 
 **Author:** [@TheTom](https://github.com/TheTom) (TurboQuant+), [@unsloth](https://huggingface.co/unsloth) (GGUF quantization)  
-**Target Hardware:** NVIDIA RTX 3090 24GB (tested & validated — also adaptable to RTX 4090, 5090, A100, H100)  
+**Target Hardware:** NVIDIA RTX 3090 24GB (tested & validated — also adaptable to RTX 4080 16GB, RTX 4090, A100, H100)  
 **OS:** Ubuntu 22.04+ / Debian 12+  
 **Last Updated:** 2026-04-22
 
@@ -69,7 +69,11 @@ git clone https://github.com/YOUR_USERNAME/turboquant-deployment.git
 cd turboquant-deployment
 
 # 2. Run the installer (downloads model + builds llama.cpp)
+#    For RTX 3090 / 24GB systems (default):
 ./scripts/install.sh
+
+#    For RTX 4080 / 16GB systems:
+# ./scripts/install.sh --gpu rtx4080
 
 # 3. Enable and start the systemd service
 sudo systemctl enable --now llama-turboquant
@@ -348,11 +352,16 @@ TurboQuant's advantage grows with **long context** — less memory bandwidth = f
 | Qwen3.6-35B-A3B | Q5_K_M | ~25 GB | ⚠️ Tight | q8_0-K + turbo4-V |
 | Qwen3.6-35B-A3B | Q8_0 | ~35 GB | ❌ No | — |
 
-### For 16 GB VRAM (RTX 4080 / 4060 Ti)
+### For 16 GB VRAM (RTX 4080 / 4070 Ti Super)
 
-Use a smaller model or more aggressive quantization:
-- Qwen3.6-35B-A3B IQ3_XXS / IQ4_XS
-- Qwen2.5-14B Q8_0
+Pre-built config: [`configs/rtx4080-16gb/`](configs/rtx4080-16gb/)
+
+| Model | Quant | Size | Context | Fit |
+|---|---|---|---|---|
+| Qwen3.6-35B-A3B | IQ4_XS | ~13 GB | 12K | ✅ Good |
+| Qwen3.6-35B-A3B | Q4_K_S | ~16 GB | 8K | ⚠️ Tight |
+| Qwen2.5-14B | Q8_0 | ~14 GB | 16K | ✅ Good |
+| Qwen3-8B | Q8_0 | ~8 GB | 32K | ✅ Lots of room |
 
 ### For 48+ GB VRAM (A6000 / A100)
 
