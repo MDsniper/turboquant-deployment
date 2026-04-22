@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 /**
- * MCP SSE + Streamable HTTP Proxy
+ * MCP SSE Proxy — correct implementation for Z.AI backends
  *
- * Supports BOTH transports on the same /sse endpoint:
- *   GET  /sse  → SSE stream (sends endpoint event)
- *   POST /sse  → Streamable HTTP (immediate response)
+ * For HTTP backends:
+ *   1. Establishes background SSE connection to Z.AI /sse endpoint
+ *   2. Extracts message endpoint URL with sessionId
+ *   3. Client POSTs → forwarded to Z.AI message endpoint
+ *   4. Z.AI responses (via SSE) → forwarded to client SSE streams
  *
- * Also supports legacy POST /message for SSE clients.
+ * For stdio backends:
+ *   Spawns local process, exposes as SSE
  */
 
 const http = require("http");
+const https = require("https");
 const { spawn } = require("child_process");
 const { randomUUID } = require("crypto");
 
@@ -32,6 +36,110 @@ if (!Z_AI_KEY) {
   console.warn("Warning: Z_AI_API_KEY not set — requests will fail auth.");
 }
 
+// ─── HTTP Backend State ────────────────────────────────────────────
+let zaiMessageUrl = null;
+let zaiSseRes = null;
+
+// Map: jsonrpc id -> { clientRes, sessionId }
+const pendingResponses = new Map();
+
+async function connectZaiSse() {
+  return new Promise((resolve, reject) => {
+    const url = new URL(BACKEND_URL.replace("/mcp", "/sse"));
+    const proto = url.protocol === "https:" ? https : http;
+
+    const req = proto.get(url, {
+      headers: { Authorization: `Bearer ${Z_AI_KEY}` },
+    }, (res) => {
+      let buffer = "";
+
+      res.on("data", (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // keep incomplete line
+
+        let eventName = "";
+        let eventData = "";
+
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            eventData = line.slice(5).trim();
+          } else if (line === "" && eventName) {
+            if (eventName === "endpoint") {
+              zaiMessageUrl = eventData.startsWith("http")
+                ? eventData
+                : `https://${url.hostname}${eventData}`;
+              console.log(`[Z.AI] Message endpoint: ${zaiMessageUrl}`);
+              resolve();
+            }
+
+            if (eventName === "message" && eventData) {
+              try {
+                const msg = JSON.parse(eventData);
+                if (msg.id !== undefined && pendingResponses.has(msg.id)) {
+                  const { clientRes, clientSessionId } = pendingResponses.get(msg.id);
+                  if (clientRes && !clientRes.writableEnded) {
+                    sendSseEvent(clientRes, "message", eventData);
+                  }
+                  pendingResponses.delete(msg.id);
+                }
+              } catch (e) {
+                // ignore parse errors
+              }
+            }
+
+            eventName = "";
+            eventData = "";
+          }
+        }
+      });
+
+      res.on("error", reject);
+      res.on("end", () => {
+        console.log("[Z.AI] SSE stream ended, reconnecting...");
+        setTimeout(() => connectZaiSse().catch(console.error), 3000);
+      });
+    });
+
+    req.on("error", reject);
+    req.setTimeout(30000);
+  });
+}
+
+async function zaiPost(body) {
+  return new Promise((resolve, reject) => {
+    if (!zaiMessageUrl) {
+      reject(new Error("Z.AI message endpoint not ready"));
+      return;
+    }
+
+    const url = new URL(zaiMessageUrl);
+    const proto = url.protocol === "https:" ? https : http;
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === "https:" ? 443 : 80),
+      path: url.pathname + url.search,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${Z_AI_KEY}`,
+        "Content-Length": Buffer.byteLength(body),
+      },
+    };
+
+    const req = proto.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => resolve({ status: res.statusCode, body: data }));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 // ─── Stdio Backend ─────────────────────────────────────────────────
 let stdioProc = null;
 let stdioPending = new Map();
@@ -50,8 +158,10 @@ function startStdioBackend() {
       try {
         const msg = JSON.parse(line);
         if (msg.id !== undefined && stdioPending.has(msg.id)) {
-          const { res, sessionId } = stdioPending.get(msg.id);
-          sendSseEvent(res, "message", JSON.stringify(msg));
+          const { clientRes } = stdioPending.get(msg.id);
+          if (clientRes && !clientRes.writableEnded) {
+            sendSseEvent(clientRes, "message", JSON.stringify(msg));
+          }
           stdioPending.delete(msg.id);
         }
       } catch {
@@ -66,61 +176,20 @@ function startStdioBackend() {
   });
 
   stdioProc.on("exit", (code) => {
-    console.log(`Stdio backend exited with code ${code}, restarting...`);
+    console.log(`Stdio backend exited (${code}), restarting...`);
     setTimeout(startStdioBackend, 2000);
   });
-
-  // Initialize
-  const initReq = {
-    jsonrpc: "2.0",
-    id: ++stdioMsgId,
-    method: "initialize",
-    params: {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "mcp-sse-proxy", version: "1.0.0" },
-    },
-  };
-  stdioProc.stdin.write(JSON.stringify(initReq) + "\n");
 }
 
-function stdioSend(method, params, sessionId, res) {
+function stdioSend(method, params, clientRes) {
   const id = ++stdioMsgId;
   const req = { jsonrpc: "2.0", id, method, params };
-  stdioPending.set(id, { res, sessionId });
+  stdioPending.set(id, { clientRes });
   stdioProc.stdin.write(JSON.stringify(req) + "\n");
 }
 
-// ─── HTTP Backend ──────────────────────────────────────────────────
-async function httpSend(body) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(BACKEND_URL);
-    const options = {
-      hostname: url.hostname,
-      port: url.port || (url.protocol === "https:" ? 443 : 80),
-      path: url.pathname + url.search,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${Z_AI_KEY}`,
-        "Content-Length": Buffer.byteLength(body),
-      },
-    };
-
-    const proto = url.protocol === "https:" ? require("https") : require("http");
-    const req = proto.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk) => (data += chunk));
-      res.on("end", () => resolve({ status: res.statusCode, body: data }));
-    });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-// ─── SSE Transport ─────────────────────────────────────────────────
-const sessions = new Map();
+// ─── Client SSE Transport ──────────────────────────────────────────
+const clientSessions = new Map();
 
 function sendSseEvent(res, event, data) {
   if (res.writableEnded) return;
@@ -146,7 +215,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // GET /sse — establish SSE stream
+  // GET /sse — establish client SSE stream
   if (url.pathname === "/sse" && req.method === "GET") {
     const sessionId = randomUUID();
     const postUrl = `/message?sessionId=${sessionId}`;
@@ -157,44 +226,47 @@ const server = http.createServer(async (req, res) => {
       "Connection": "keep-alive",
     });
 
-    sessions.set(sessionId, res);
-    console.log(`[${sessionId}] Client connected (SSE)`);
+    clientSessions.set(sessionId, res);
+    console.log(`[client ${sessionId}] Connected`);
 
-    // Send endpoint event
     sendSseEvent(res, "endpoint", postUrl);
 
     req.on("close", () => {
-      sessions.delete(sessionId);
-      console.log(`[${sessionId}] Client disconnected`);
+      clientSessions.delete(sessionId);
+      console.log(`[client ${sessionId}] Disconnected`);
     });
     return;
   }
 
-  // POST /sse — Streamable HTTP transport
+  // POST /sse — Streamable HTTP
   if (url.pathname === "/sse" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", async () => {
       try {
+        const jsonBody = JSON.parse(body);
+        const id = jsonBody.id;
+
         if (BACKEND_TYPE === "http") {
-          const result = await httpSend(body);
+          // Store pending so we can route Z.AI response back
+          const lastClient = Array.from(clientSessions.values()).pop();
+          if (id !== undefined && lastClient) {
+            pendingResponses.set(id, { clientRes: lastClient, clientSessionId: "streamable" });
+          }
+
+          const result = await zaiPost(body);
           res.writeHead(result.status, { "Content-Type": "application/json" });
           res.end(result.body);
         } else {
-          const jsonBody = JSON.parse(body);
+          const lastClient = Array.from(clientSessions.values()).pop();
           res.writeHead(202, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ accepted: true }));
-          const method = jsonBody.method;
-          const params = jsonBody.params || {};
-          // For stdio, we need a session to send back via SSE
-          // Streamable HTTP over stdio is tricky — we'll return via the most recent session
-          const lastSession = Array.from(sessions.values()).pop();
-          if (lastSession) {
-            stdioSend(method, params, "streamable", lastSession);
+          if (lastClient) {
+            stdioSend(jsonBody.method, jsonBody.params || {}, lastClient);
           }
         }
       } catch (err) {
-        console.error("Error handling POST /sse:", err.message);
+        console.error("POST /sse error:", err.message);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
       }
@@ -205,34 +277,33 @@ const server = http.createServer(async (req, res) => {
   // POST /message — legacy SSE message endpoint
   if (url.pathname === "/message" && req.method === "POST") {
     const sessionId = url.searchParams.get("sessionId");
+    const clientRes = clientSessions.get(sessionId);
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", async () => {
       try {
         const jsonBody = JSON.parse(body);
+        const id = jsonBody.id;
 
         if (BACKEND_TYPE === "http") {
-          const result = await httpSend(body);
+          if (id !== undefined && clientRes) {
+            pendingResponses.set(id, { clientRes, clientSessionId: sessionId });
+          }
+
+          const result = await zaiPost(body);
           res.writeHead(result.status, { "Content-Type": "application/json" });
           res.end(result.body);
 
-          const sseRes = sessions.get(sessionId);
-          if (sseRes && result.status === 200) {
-            sendSseEvent(sseRes, "message", result.body);
-          }
+          // Z.AI response will come via background SSE and be routed above
         } else {
           res.writeHead(202, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ accepted: true }));
-
-          const method = jsonBody.method;
-          const params = jsonBody.params || {};
-          const sseRes = sessions.get(sessionId);
-          if (sseRes) {
-            stdioSend(method, params, sessionId, sseRes);
+          if (clientRes) {
+            stdioSend(jsonBody.method, jsonBody.params || {}, clientRes);
           }
         }
       } catch (err) {
-        console.error("Error handling message:", err.message);
+        console.error("POST /message error:", err.message);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
       }
@@ -245,17 +316,31 @@ const server = http.createServer(async (req, res) => {
 });
 
 // Start
-if (BACKEND_TYPE === "stdio") {
-  startStdioBackend();
+async function main() {
+  if (BACKEND_TYPE === "stdio") {
+    startStdioBackend();
+  } else {
+    console.log("[Z.AI] Connecting to SSE endpoint...");
+    try {
+      await connectZaiSse();
+    } catch (err) {
+      console.error("[Z.AI] Failed to connect SSE:", err.message);
+      console.log("[Z.AI] Retrying in 5s...");
+      setTimeout(main, 5000);
+      return;
+    }
+  }
+
+  server.listen(PORT, () => {
+    console.log(`MCP SSE Proxy running on http://0.0.0.0:${PORT}/sse`);
+  });
 }
 
-server.listen(PORT, () => {
-  console.log(`MCP SSE Proxy running on http://0.0.0.0:${PORT}/sse`);
-  console.log(`Backend: ${BACKEND_TYPE} → ${BACKEND_TYPE === "http" ? BACKEND_URL : BACKEND_CMD}`);
-});
+main();
 
 process.on("SIGINT", () => {
   if (stdioProc) stdioProc.kill();
+  if (zaiSseRes) zaiSseRes.destroy();
   server.close();
   process.exit(0);
 });
