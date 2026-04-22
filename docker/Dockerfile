@@ -1,0 +1,16 @@
+FROM node:22-alpine
+
+WORKDIR /app
+COPY mcp-sse-proxy.js .
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV MCP_BACKEND_TYPE=http
+ENV MCP_BACKEND_URL=""
+ENV MCP_BACKEND_CMD=""
+ENV MCP_BACKEND_ARGS="[]"
+ENV Z_AI_API_KEY=""
+ENV Z_AI_MODE="ZAI"
+
+CMD ["node", "mcp-sse-proxy.js"]

@@ -28,57 +28,93 @@
 
 ---
 
-## Ready-to-Paste Configurations
+## Recommended: Docker SSE Containers
 
-### 1. Search MCP — `webSearchPrime`
+The cleanest solution — 4 Docker containers that expose Z.AI MCP servers as local SSE URLs. Your webchat tool just adds `http://localhost:PORT/sse` for each one.
 
-**Purpose:** Search the web and return summaries, URLs, titles.
+### Step 1: Set your API key
 
+```bash
+cd /home/bwilliams/turboquant-deployment/docker
+cp .env.example .env
+nano .env
+# Paste your Z.AI API key
 ```
-Server URL:
-https://api.z.ai/api/mcp/web_search_prime/sse?Authorization=YOUR_Z_AI_API_KEY
 
-Custom Headers:
-(none needed)
+### Step 2: Start the containers
+
+```bash
+cd /home/bwilliams/turboquant-deployment/docker
+docker compose up -d
+```
+
+### Step 3: Add to your webchat tool
+
+| Container | URL | What It Does |
+|---|---|---|
+| **mcp-search** | `http://localhost:3002/sse` | Web search |
+| **mcp-reader** | `http://localhost:3003/sse` | Read any webpage |
+| **mcp-zread** | `http://localhost:3004/sse` | GitHub repo analysis |
+| **mcp-vision** | `http://localhost:3005/sse` | Image/video/screenshot analysis |
+
+**No custom headers needed** — the proxy injects the auth internally.
+
+### Step 4: Verify
+
+```bash
+# All 4 should show "Up"
+docker ps | grep mcp-
+
+# Test the SSE endpoint
+curl -N http://localhost:3002/sse
+# Should show: event: endpoint\ndata: /message?sessionId=...
+```
+
+### Management
+
+```bash
+# Stop
+docker compose down
+
+# Restart
+docker compose restart
+
+# View logs
+docker logs -f mcp-search
 ```
 
 ---
 
-### 2. Reader MCP — `webReader`
+## Manual URL Configuration (Alternative)
 
-**Purpose:** Fetch any webpage and extract its main content.
+If you prefer not to use Docker, paste these directly into your chat tool's "Add New Server" dialog.
 
-```
-Server URL:
-https://api.z.ai/api/mcp/web_reader/sse?Authorization=YOUR_Z_AI_API_KEY
+> **Important:** Your webchat tool must support **Streamable HTTP** transport (not SSE) for these URLs to work. If your tool only supports SSE, use the Docker containers above.
 
-Custom Headers:
-(none needed)
-```
+### Search MCP — `webSearchPrime`
 
----
+| Field | Value |
+|---|---|
+| **Server URL** | `https://api.z.ai/api/mcp/web_search_prime/mcp` |
+| **Custom Header** | `Authorization: Bearer YOUR_Z_AI_API_KEY` |
 
-### 3. ZRead MCP — `zread`
+### Reader MCP — `webReader`
 
-**Purpose:** Analyze GitHub repositories — structure, docs, issues, file contents.
+| Field | Value |
+|---|---|
+| **Server URL** | `https://api.z.ai/api/mcp/web_reader/mcp` |
+| **Custom Header** | `Authorization: Bearer YOUR_Z_AI_API_KEY` |
 
-```
-Server URL:
-https://api.z.ai/api/mcp/zread/sse?Authorization=YOUR_Z_AI_API_KEY
+### ZRead MCP — `zread`
 
-Custom Headers:
-(none needed)
-```
+| Field | Value |
+|---|---|
+| **Server URL** | `https://api.z.ai/api/mcp/zread/mcp` |
+| **Custom Header** | `Authorization: Bearer YOUR_Z_AI_API_KEY` |
 
----
+### Vision MCP — `@z_ai/mcp-server`
 
-### 4. Vision MCP — `@z_ai/mcp-server`
-
-**Purpose:** Analyze images, screenshots, videos, diagrams, error snapshots.
-
-**This server runs locally on your machine** (not hosted by Z.AI). It requires Node.js.
-
-#### Step A: Start the local proxy
+This one runs locally on your machine. Start the proxy first:
 
 ```bash
 cd /home/bwilliams/turboquant-deployment
@@ -86,29 +122,14 @@ export Z_AI_API_KEY="your_key"
 node scripts/mcp-vision-proxy.js
 ```
 
-Keep this terminal open. The proxy runs on port `3001`.
+Then in your chat tool:
 
-#### Step B: Add to your chat UI
+| Field | Value |
+|---|---|
+| **Server URL** | `http://localhost:3001/sse` |
+| **Custom Headers** | *(none needed)* |
 
-```
-Server URL:
-http://localhost:3001/sse
-
-Custom Headers:
-(none needed)
-```
-
----
-
-## Alternative: Using Headers Instead of URL Query Params
-
-If your chat UI requires headers rather than embedding the key in the URL:
-
-| Server | URL | Header |
-|---|---|---|
-| Search | `https://api.z.ai/api/mcp/web_search_prime/sse` | `Authorization: Bearer YOUR_Z_AI_API_KEY` |
-| Reader | `https://api.z.ai/api/mcp/web_reader/sse` | `Authorization: Bearer YOUR_Z_AI_API_KEY` |
-| ZRead | `https://api.z.ai/api/mcp/zread/sse` | `Authorization: Bearer YOUR_Z_AI_API_KEY` |
+> Keep the proxy terminal open. To stop it, press `Ctrl+C`.
 
 ---
 
@@ -134,53 +155,35 @@ Once all 4 servers are connected, your local model gains these capabilities:
 
 ---
 
-## Automated Alternatives (No Copy-Paste Required)
-
-If you want a fully pre-configured solution without manually adding servers to a UI:
-
-### Option A: Terminal Chat (`mcp-chat.py`)
-
-Already configured. Just run:
-
-```bash
-cd /home/bwilliams/turboquant-deployment
-python3 scripts/mcp-chat.py
-```
-
-Type `/search`, `/read`, `/repo`, `/vision` to use tools directly.
-
-### Option B: LibreChat (Web UI)
-
-A ChatGPT-like web interface that supports both local LLM and MCP servers natively.
-
-```bash
-# One-time setup
-cd /home/bwilliams/turboquant-deployment
-docker compose -f docker/librechat.yaml up -d
-```
-
-Pre-configured with all 4 Z.AI MCP servers + your local llama-server.
-
-### Option C: Goose (Terminal)
-
-Already installed on this machine. Add Z.AI servers to `~/.config/goose/config.yaml` under `mcpServers`.
-
----
-
 ## Troubleshooting
 
-### "Connection refused" to localhost:3001
+### "token expired or incorrect"
 
-The Vision proxy isn't running. Start it:
+Your Z.AI API key has expired or been invalidated. Get a new one from your [Z.AI Coding Plan dashboard](https://z.ai/).
+
 ```bash
-node scripts/mcp-vision-proxy.js
+# Update the key
+nano docker/.env
+docker compose restart
 ```
 
-### "401 Unauthorized" on Z.AI endpoints
+### "Connection refused" to localhost:3002-3005
 
-Your API key is missing or invalid. Verify:
+The Docker containers aren't running. Start them:
 ```bash
-echo $Z_AI_API_KEY
+cd docker
+docker compose up -d
+```
+
+### Vision proxy won't start
+
+```bash
+# Verify Node.js >= v22
+node --version
+
+# If missing:
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
 ```
 
 ### MCP tools don't appear in chat

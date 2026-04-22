@@ -421,23 +421,39 @@ Connect Z.AI's MCP servers (Vision, Search, Reader, ZRead) to your local TurboQu
 
 **Architecture:** AI Client → Local TurboQuant LLM + Z.AI MCP Tool Servers
 
+### Quick Setup: Docker SSE Containers (Recommended)
+
+If your chat tool only supports **SSE** transport, use the Docker containers — they expose all 4 Z.AI MCP servers as local SSE URLs:
+
 ```bash
-# Quick setup
-cp mcp-configs/cline.json ~/.config/cline/mcp-settings.json
-# Edit and add your Z_AI_API_KEY
+cd docker
+cp .env.example .env
+# Edit .env and add your Z_AI_API_KEY
+docker compose up -d
 ```
 
-Full guide: [`docs/mcp-integration.md`](docs/mcp-integration.md)
+Then in your chat tool, add:
+- `http://localhost:3002/sse` → Search
+- `http://localhost:3003/sse` → Reader
+- `http://localhost:3004/sse` → ZRead
+- `http://localhost:3005/sse` → Vision
 
-**Supported clients:** Cline (VS Code), Goose (Terminal), Continue.dev, OpenCode
+### Alternative: Terminal Chat Client
 
-**What you get:**
+```bash
+python3 scripts/mcp-chat.py
+```
+
+### What You Get
+
 - 🌐 **Web Search** — Real-time information retrieval
 - 📄 **Web Reader** — Fetch and summarize any webpage
 - 🖼️ **Vision** — Analyze screenshots, diagrams, charts, videos
 - 🔍 **ZRead** — Deep GitHub repo analysis
 
 All LLM inference stays local on your GPU. Only tool queries hit Z.AI's APIs.
+
+Full guide: [`docs/mcp-integration.md`](docs/mcp-integration.md)
 
 ---
 

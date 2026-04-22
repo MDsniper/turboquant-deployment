@@ -1,0 +1,62 @@
+services:
+  mcp-search:
+    build: .
+    container_name: mcp-search
+    ports:
+      - "3002:3000"
+    environment:
+      - PORT=3000
+      - MCP_BACKEND_TYPE=http
+      - MCP_BACKEND_URL=https://api.z.ai/api/mcp/web_search_prime/mcp
+      - Z_AI_API_KEY=${Z_AI_API_KEY}
+    restart: unless-stopped
+    networks:
+      - mcp-net
+
+  mcp-reader:
+    build: .
+    container_name: mcp-reader
+    ports:
+      - "3003:3000"
+    environment:
+      - PORT=3000
+      - MCP_BACKEND_TYPE=http
+      - MCP_BACKEND_URL=https://api.z.ai/api/mcp/web_reader/mcp
+      - Z_AI_API_KEY=${Z_AI_API_KEY}
+    restart: unless-stopped
+    networks:
+      - mcp-net
+
+  mcp-zread:
+    build: .
+    container_name: mcp-zread
+    ports:
+      - "3004:3000"
+    environment:
+      - PORT=3000
+      - MCP_BACKEND_TYPE=http
+      - MCP_BACKEND_URL=https://api.z.ai/api/mcp/zread/mcp
+      - Z_AI_API_KEY=${Z_AI_API_KEY}
+    restart: unless-stopped
+    networks:
+      - mcp-net
+
+  mcp-vision:
+    build: .
+    container_name: mcp-vision
+    ports:
+      - "3005:3000"
+    environment:
+      - PORT=3000
+      - MCP_BACKEND_TYPE=stdio
+      - MCP_BACKEND_CMD=npx
+      - MCP_BACKEND_ARGS=["-y","@z_ai/mcp-server"]
+      - Z_AI_API_KEY=${Z_AI_API_KEY}
+      - Z_AI_MODE=ZAI
+    restart: unless-stopped
+    networks:
+      - mcp-net
+
+networks:
+  mcp-net:
+    driver: bridge
